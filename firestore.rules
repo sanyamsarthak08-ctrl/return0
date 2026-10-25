@@ -1,0 +1,46 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // Anything not listed below is denied. No client can ever WRITE coins, tasks, projects, claims,
+    // submissions, AI results, decisions, quests or portfolios: only Cloud Functions can.
+    // (questKeys and platform have no rule on purpose: nobody on the client can read them.)
+
+    function signedIn() { return request.auth != null; }
+    function mine(uid) { return signedIn() && request.auth.uid == uid; }
+    function inTeam() { return signedIn() && (resource.data.uid == request.auth.uid
+                          || resource.data.ownerId == request.auth.uid
+                          || request.auth.uid in resource.data.members); }
+
+    match /users/{uid} {
+      allow read: if mine(uid);
+      allow update: if mine(uid)
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['displayName'])
+        && request.resource.data.displayName is string
+        && request.resource.data.displayName.size() <= 40;
+      match /quests/{questId} { allow read: if mine(uid); }
+    }
+
+    match /wallets/{uid} {
+      allow read: if mine(uid);
+      match /ledger/{entryId} { allow read: if mine(uid); }
+    }
+
+    match /projects/{projectId} {
+      allow read: if signedIn() && resource.data.ownerId == request.auth.uid;
+    }
+
+    match /tasks/{taskId} {
+      allow read: if signedIn() && (resource.data.ownerId == request.auth.uid
+                     || resource.data.status in ['published', 'closed']);
+    }
+
+    match /claims/{claimId} { allow read: if inTeam(); }          // squad members can read their claim
+    match /submissions/{id} { allow read: if inTeam(); }
+    match /aiResults/{id}   { allow read: if inTeam(); }
+    match /decisions/{id}   { allow read: if inTeam(); }
+
+    // public skill-tree link: anyone can open it, only the server can write it
+    match /portfolios/{slug} { allow read: if true; }
+  }
+}

@@ -1,0 +1,86 @@
+import 'dart:async';
+
+import 'package:firebase_auth/firebase_auth.dart';
+import 'package:flutter/foundation.dart' show debugPrint, kIsWeb;
+
+import '../models.dart';
+import 'backend_service.dart';
+
+abstract class AuthService {
+  Stream<AppUser?> authStateChanges();
+  AppUser? get currentUser;
+  Future<void> signInWithGoogle();
+  Future<void> signOut();
+}
+
+/// Offline fake, no backend needed.
+class MockAuthService implements AuthService {
+  final _ctrl = StreamController<AppUser?>.broadcast();
+  AppUser? _user;
+  static const _demo =
+      AppUser(uid: 'mock-user', name: 'Demo Builder', email: 'demo@crumb.app');
+
+  @override
+  Stream<AppUser?> authStateChanges() async* {
+    yield _user;
+    yield* _ctrl.stream;
+  }
+
+  @override
+  AppUser? get currentUser => _user;
+
+  @override
+  Future<void> signInWithGoogle() async {
+    _user = _demo;
+    _ctrl.add(_user);
+  }
+
+  @override
+  Future<void> signOut() async {
+    _user = null;
+    _ctrl.add(null);
+  }
+}
+
+/// Real Firebase Auth. Works with the Auth emulator while you test.
+class FirebaseAuthService implements AuthService {
+  final FirebaseAuth _auth = FirebaseAuth.instance;
+
+  AppUser? _map(User? u) {
+    if (u == null) return null;
+    final fallback = u.isAnonymous
+        ? 'Guest builder'
+        : (u.email?.split('@').first ?? 'Builder');
+    return AppUser(
+      uid: u.uid,
+      name: (u.displayName?.isNotEmpty ?? false) ? u.displayName! : fallback,
+      email: u.email ?? '',
+      photoUrl: u.photoURL,
+    );
+  }
+
+  @override
+  Stream<AppUser?> authStateChanges() => _auth.authStateChanges().map(_map);
+
+  @override
+  AppUser? get currentUser => _map(_auth.currentUser);
+
+  @override
+  Future<void> signInWithGoogle() async {
+    if (kIsWeb) {
+      // With the emulator this opens a fake Google account picker.
+      await _auth.signInWithPopup(GoogleAuthProvider());
+    } else {
+      // Testing only. Swap for google_sign_in before a real release.
+      await _auth.signInAnonymously();
+    }
+    try {
+      await BackendService.instance.initUser(); // creates the wallet doc
+    } catch (e) {
+      debugPrint('initUser failed: $e');
+    }
+  }
+
+  @override
+  Future<void> signOut() => _auth.signOut();
+}
